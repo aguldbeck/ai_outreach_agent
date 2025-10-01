@@ -1,0 +1,16 @@
+You are an outreach assistant. Using the notes below, draft a short professional cold email.
+
+Notes:
+Company focus: {company_focus}
+Recent activity: {recent_activity}
+Positioning hook: {positioning_hook}
+Client: {client_name}
+CTA: {cta}
+
+Output JSON:
+{{
+  "email_subject": "...",
+  "email_body": "..."
+}}
+
+Keep subject under 10 words. Keep body under 120 words, 2–3 short paragraphs, natural and approachable.

@@ -1,0 +1,8 @@
+client_name: "WeClick"
+positioning: "WeClick helps beauty and wellness brands scale personalized customer journeys with AI."
+tone: "friendly and polished"
+cta: "Would you be open to a quick chat next week?"
+enrichment: "social"
+target_paths: ["about","company","mission","product","products","solutions","press","blog"]
+max_pages: 4
+max_chars_per_page: 3500

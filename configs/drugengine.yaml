@@ -1,0 +1,8 @@
+client_name: "Drug Engine Pharma"
+positioning: "Drug Engine Pharma helps biotech/pharma teams accelerate R&D by identifying partners and streamlining vendor selection."
+tone: "professional and insightful"
+cta: "Would you be open to a short discovery call next week?"
+enrichment: "pipeline"
+target_paths: ["pipeline","research","clinical","trial","publications","about","company","news","press"]
+max_pages: 6
+max_chars_per_page: 4000

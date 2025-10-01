@@ -1,0 +1,4 @@
+name,company,job_title,linkedin_url,website,enriched_field
+Jane Smith,Glow Beauty,Marketing Director,https://linkedin.com/in/janesmith,https://glowbeauty.com,Processed with config: drugengine
+Mark Jones,FitnessPro,Founder,https://linkedin.com/in/markjones,https://fitnesspro.com,Processed with config: drugengine
+Ava Chen,BioNova Therapeutics,VP Clinical,https://linkedin.com/in/ava-chen,https://bionova-therapeutics.com,Processed with config: drugengine

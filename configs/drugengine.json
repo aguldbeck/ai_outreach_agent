@@ -1,0 +1,20 @@
+{
+  "client_name": "Drug Engine Pharma",
+  "enrichment": "pipeline",
+  "positioning": "Drug Engine Pharma helps biotech teams accelerate R&D with better vendor matching.",
+  "tone": "professional and insightful",
+  "cta": "Would you be open to a short discovery call next week?",
+  "target_paths": [
+    "pipeline",
+    "research",
+    "clinical",
+    "trial",
+    "publications",
+    "about",
+    "company",
+    "news",
+    "press"
+  ],
+  "max_pages": 6,
+  "max_chars_per_page": 4000
+}

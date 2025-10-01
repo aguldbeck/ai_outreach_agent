@@ -1,0 +1,19 @@
+You are a research assistant preparing structured notes for {client_name}'s outreach engine.
+You will be given snippets scraped from a company's website (home/about/products/press/blog).
+
+Task:
+1) Summarize the **company_focus** in 1–2 sentences.
+2) Identify **recent_activity** in 1–2 bullets (funding, launches, partnerships, events). If unclear, use "Unknown".
+3) Propose a **positioning_hook** in one sentence that connects {client_name}'s value to this company.
+
+Output strict JSON:
+{{
+  "company_focus": "...",
+  "recent_activity": "...",
+  "positioning_hook": "..."
+}}
+
+Be concise and neutral. Say "Unknown" if the sources don't state it clearly.
+
+Sources:
+{sources}
