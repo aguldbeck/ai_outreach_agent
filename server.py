@@ -100,7 +100,7 @@ def log_event(level: str, message: str, **extra):
 # -----------------------------
 # App & CORS
 # -----------------------------
-app = FastAPI(title="AI Outreach Agent", version="0.5.0")
+app = FastAPI(title="AI Outreach Agent", version="0.5.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -110,9 +110,36 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# -----------------------------
+# Routers
+# -----------------------------
 # Include the authentication router
 app.include_router(auth_router)
 
+# -----------------------------
+# Health Check
+# -----------------------------
+@app.get("/health")
+def health_check():
+    """
+    Lightweight health check for Render uptime monitoring.
+    Confirms the app and filesystem are alive.
+    """
+    try:
+        # simple sanity check: can we read the jobs log file?
+        _ = _read_json(JOBS_FILE, [])
+        return {
+            "status": "ok",
+            "service": "ai_outreach_agent",
+            "time": now_iso(),
+            "public_read": PUBLIC_READ,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Health check failed: {e}")
+
+# -----------------------------
+# Root Endpoint
+# -----------------------------
 @app.get("/")
 def root():
     return {
