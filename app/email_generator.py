@@ -1,46 +1,77 @@
-import os, json
-from tenacity import retry, stop_after_attempt, wait_exponential
+# email_generator.py
+import os, random, json
 from openai import OpenAI
 
-TEMPLATES = {
-    "general": "email_general.txt",
-    "pipeline": "email_pipeline.txt",
-    "social": "email_social.txt",
-}
+MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
-def load_template(mode: str) -> str:
-    fname = TEMPLATES.get(mode, "email_general.txt")
-    path = os.path.join(os.path.dirname(__file__), "..", "prompts", fname)
+def load_weclick_config(config_name: str = "weclick") -> dict:
+    path = os.path.join("configs", f"{config_name}.json")
     with open(path, "r", encoding="utf-8") as f:
-        return f.read()
+        return json.load(f)
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
-def call_openai(prompt: str) -> dict:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        return {"email_subject":"[Demo subject]","email_body":"[Demo body: no API key set]"}
-    client = OpenAI(api_key=api_key)
-    resp = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role":"user","content":prompt}],
-        temperature=0.5,
-        response_format={"type":"json_object"}
-    )
-    content = resp.choices[0].message.content
+def compose_email(row: dict, profile: dict, config_name: str = "weclick") -> dict:
+    cfg = load_weclick_config(config_name)
+    name = row.get("name") or "there"
+    company = row.get("company") or ""
+    title = row.get("job_title") or row.get("title") or ""
+    posts = profile.get("posts", []) or []
+    headline = profile.get("headline", "")
+    about = profile.get("about", "")
+
+    # Build small context: pick up to one post
+    post_snip = posts[0] if posts else ""
+    proof = random.choice(cfg["case_studies"])
+
+    prompt = f"""
+You are a top-tier DTC retention copywriter.
+
+Write a 120–150 word cold email to {name} ({title}) at {company}.
+Reference their LinkedIn context below when relevant (one natural reference max).
+
+LinkedIn Headline: {headline}
+About: {about}
+Recent Post: {post_snip}
+
+WeClick positioning:
+{cfg["positioning"]}
+
+Use exactly ONE proof point:
+- {proof}
+
+Tone: {cfg["tone"]}
+
+CTA: {cfg["cta_primary"]} (secondary acceptable: {cfg["cta_secondary"]})
+
+Return as:
+Subject: <subject>
+Body: <body>
+"""
+
+    # Fallback if no API key: return a deterministic stub
+    if not _client:
+        subj = f"Quick retention idea for {company}"
+        body = (
+            f"Hi {name},\n\n"
+            f"Saw your work at {company}. Based on your profile, there's likely unused CLV upside "
+            f"in lifecycle flows and segmentation.\n\n{cfg['positioning']}\n\n"
+            f"Recent win: {proof}\n\n"
+            f"If helpful, I can run a {cfg['cta_primary']}. —Alex\n"
+        )
+        return {"subject": subj, "body": body}
+
     try:
-        return json.loads(content)
-    except Exception:
-        return {"raw": content}
-
-def generate_email(enrichment: str, notes: dict, client_name: str, cta: str) -> dict:
-    template = load_template(enrichment)
-    prompt = template.format(
-        client_name=client_name,
-        cta=cta,
-        company_focus=notes.get("company_focus",""),
-        pipeline_summary=notes.get("pipeline_summary",""),
-        recent_activity=notes.get("recent_activity",""),
-        social_voice=notes.get("social_voice",""),
-        positioning_hook=notes.get("positioning_hook","")
-    )
-    return call_openai(prompt)
+        resp = _client.chat.completions.create(
+            model=MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.8
+        )
+        text = resp.choices[0].message.content
+        parts = text.split("Body:")
+        subject = parts[0].replace("Subject:", "").strip() if len(parts) > 1 else "Quick idea"
+        body = parts[1].strip() if len(parts) > 1 else text.strip()
+        return {"subject": subject, "body": body}
+    except Exception as e:
+        print(f"[Stage3] OpenAI error: {e}")
+        return {"subject": "Quick idea", "body": "Fallback body due to API error."}

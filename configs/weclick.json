@@ -1,19 +1,18 @@
 {
-  "client_name": "WeClick",
-  "enrichment": "social",
-  "positioning": "WeClick helps beauty and wellness brands scale personalized journeys with AI.",
-  "tone": "friendly and polished",
-  "cta": "Would you be open to a quick chat next week?",
-  "target_paths": [
-    "about",
-    "company",
-    "mission",
-    "product",
-    "products",
-    "solutions",
-    "press",
-    "blog"
+  "positioning": "WeClick helps 7–9 figure DTC brands scale profitably using email, SMS, and retention strategies that go beyond generic discounts. We focus on driving customer lifetime value through deep segmentation, personalized lifecycle flows, and data-led execution across Klaviyo and complementary tools.",
+  "case_studies": [
+    "CoverFX: High-converting campaigns, retention-focused flows, and AOV growth via cross-sells.",
+    "DTC Beauty Brand: $91 LTV increase in 12 months through strategic email/SMS.",
+    "Jewelry Brand: Reduced 42% returns using email-driven post-purchase automation.",
+    "Health Supplement Brand: 67.12% repeat purchase rate through bundling and smart flows."
   ],
-  "max_pages": 4,
-  "max_chars_per_page": 3500
+  "cta_primary": "DM me for a FREE Klaviyo/Omnised audit",
+  "cta_secondary": "Book a call or reply to this email for 1:1 support",
+  "tone": "Confident, insightful, operator-level, value-focused for DTC decision-makers.",
+  "links": [
+    "https://oscar-81357.wistia.com/medias/v9z9zm23v0",
+    "https://oscar-81357.wistia.com/medias/lq3kyxiy72",
+    "https://oscar-81357.wistia.com/medias/mc1zdwp403",
+    "https://oscar-81357.wistia.com/medias/9vsvgt22ht"
+  ]
 }

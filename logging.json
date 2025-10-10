@@ -1,31 +1,16 @@
-{
-  "version": 1,
-  "disable_existing_loggers": false,
-  "formatters": {
-    "json": {
-      "format": "%(message)s"
-    },
-    "plain": {
-      "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-    }
+[
+  {
+    "time": "2025-10-07T18:47:16.003429+00:00",
+    "level": "INFO",
+    "message": "Job queued",
+    "job_id": "a6dfad33-914b-421f-8202-0b2bee5de435",
+    "filename": "test.csv"
   },
-  "handlers": {
-    "console": {
-      "class": "logging.StreamHandler",
-      "level": "INFO",
-      "formatter": "json",
-      "stream": "ext://sys.stdout"
-    }
-  },
-  "loggers": {
-    "server": {
-      "handlers": ["console"],
-      "level": "INFO",
-      "propagate": false
-    }
-  },
-  "root": {
-    "handlers": ["console"],
-    "level": "INFO"
+  {
+    "time": "2025-10-07T18:47:16.004316+00:00",
+    "level": "INFO",
+    "message": "Job succeeded",
+    "job_id": "a6dfad33-914b-421f-8202-0b2bee5de435",
+    "output": "/downloads/test_a6dfad33-914b-421f-8202-0b2bee5de435_stage3.csv"
   }
-}
+]
