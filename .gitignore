@@ -1,19 +1,20 @@
+# Python & virtual env
 __pycache__/
+.venv/
+.env
 *.pyc
 *.pyo
 *.pyd
-*.sqlite3
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-outputs/*
-!outputs/.gitkeep
-jobs.json
+
+# OS files
 .DS_Store
-ai-outreach.txt
-ai-outreach.txt
-ngrok_recovery_codes.txt
+Thumbs.db
+
+# App artifacts
+*.log
+downloads/
+uploads/
+outputs/
+jobs.json
+users.json
+jobs.backup.json
