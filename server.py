@@ -18,12 +18,15 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from dotenv import load_dotenv
 
 # Internal imports
 from parser import read_input_file, validate_columns
 from auth import router as auth_router, get_current_user, get_current_user_optional, User
+
+# ✅ NEW: use Lovable Cloud DB helper (replaces supabase/local JSON persistence)
+from app.db_helper import db_insert_job, db_update_job, db_get_jobs
 
 # -----------------------------
 # Setup and paths
@@ -32,8 +35,8 @@ ROOT = os.getcwd()
 UPLOADS_DIR = os.path.join(ROOT, "uploads")
 OUTPUTS_DIR = os.path.join(ROOT, "outputs")
 DOWNLOADS_DIR = os.path.join(ROOT, "downloads")
-LOG_FILE = os.path.join(ROOT, "logging.json")
-JOBS_FILE = os.path.join(ROOT, "jobs.json")
+LOG_FILE = os.path.join(ROOT, "logging.json")   # still file-based; logs are lightweight
+JOBS_FILE = os.path.join(ROOT, "jobs.json")      # retained for local dev fallback only
 SAMPLE_FILE = os.path.join(ROOT, "sample_template.csv")
 
 os.makedirs(UPLOADS_DIR, exist_ok=True)
@@ -45,6 +48,7 @@ def _ensure_json(path: str, default):
         with open(path, "w") as f:
             json.dump(default, f)
 
+# Keep local JSON files for dev fallback/log viewing; prod uses DB
 _ensure_json(JOBS_FILE, [])
 _ensure_json(LOG_FILE, [])
 
@@ -100,7 +104,7 @@ def log_event(level: str, message: str, **extra):
 # -----------------------------
 # App & CORS
 # -----------------------------
-app = FastAPI(title="AI Outreach Agent", version="0.5.2")
+app = FastAPI(title="AI Outreach Agent", version="0.6.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -121,14 +125,26 @@ app.include_router(auth_router)
 # -----------------------------
 @app.get("/health")
 def health_check():
-    """Lightweight health check for Render uptime monitoring."""
+    """
+    Lightweight health check for uptime monitoring.
+    - Verifies app is alive
+    - Attempts a minimal DB read via db_get_jobs()
+    """
     try:
-        _ = _read_json(JOBS_FILE, [])
+        # Ping DB; don't fail health if DB is empty — just report db_ok flag.
+        db_ok = True
+        try:
+            _ = db_get_jobs(limit=1)
+        except Exception as db_err:
+            db_ok = False
+            log_event("WARN", "Health DB check failed", error=str(db_err))
+
         return {
             "status": "ok",
             "service": "ai_outreach_agent",
             "time": now_iso(),
             "public_read": PUBLIC_READ,
+            "db_ok": db_ok,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Health check failed: {e}")
@@ -207,13 +223,32 @@ def csv_with_extra_columns(src: str, dst: str, extra_headers: List[str], extra_v
     with open(dst, "w", newline="", encoding="utf-8") as fout:
         csv.writer(fout).writerows(out)
 
+def _get_job_by_id(job_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch a single job from DB by id."""
+    try:
+        jobs = db_get_jobs()  # returns all jobs (or you can implement db_get_job(job_id))
+        for j in jobs:
+            if j.get("id") == job_id:
+                return j
+    except Exception as e:
+        log_event("ERROR", "DB read failed in _get_job_by_id", job_id=job_id, error=str(e))
+    # Dev fallback: look in local JSON if DB unavailable
+    try:
+        jobs = _read_json(JOBS_FILE, [])
+        for j in jobs:
+            if j.get("id") == job_id:
+                return j
+    except Exception:
+        pass
+    return None
+
 def process_job(job_id: str):
-    """Simulate the enrichment pipeline in 3 stages."""
-    jobs = _read_json(JOBS_FILE, [])
-    job = next((j for j in jobs if j.get("id") == job_id), None)
+    """Simulate the enrichment pipeline in 3 stages (writes progress to DB)."""
+    job = _get_job_by_id(job_id)
     if not job:
         log_event("ERROR", "Job not found", job_id=job_id)
         return
+
     try:
         _update_job(job_id, status="processing", updated_at=now_iso(), progress=5)
 
@@ -231,23 +266,39 @@ def process_job(job_id: str):
         csv_copy(upload_path, p1)
         _update_job(job_id, progress=35, updated_at=now_iso())
 
-        csv_with_extra_columns(p1, p2, ["post_1","post_2","post_3"], ["(p1)","(p2)","(p3)"])
+        csv_with_extra_columns(p1, p2, ["post_1", "post_2", "post_3"], ["(p1)", "(p2)", "(p3)"])
         _update_job(job_id, progress=65, updated_at=now_iso())
 
-        csv_with_extra_columns(p2, p3, ["email_subject","email_body"],
-                               ["Quick idea to boost retention",
-                                "Hi {first_name}, saw your work at {company_name}. Open to a quick audit?"])
-        _update_job(job_id,
-                    status="succeeded",
-                    progress=100,
-                    output_url=f"/downloads/{s3}",
-                    updated_at=now_iso())
+        csv_with_extra_columns(
+            p2,
+            p3,
+            ["email_subject", "email_body"],
+            [
+                "Quick idea to boost retention",
+                "Hi {first_name}, saw your work at {company_name}. Open to a quick audit?",
+            ],
+        )
+        _update_job(
+            job_id,
+            status="succeeded",
+            progress=100,
+            output_url=f"/downloads/{s3}",
+            updated_at=now_iso(),
+        )
         log_event("INFO", "Job succeeded", job_id=job_id)
     except Exception as e:
         _update_job(job_id, status="failed", error=str(e), updated_at=now_iso())
         log_event("ERROR", "Job failed", job_id=job_id, error=str(e))
 
 def _update_job(job_id: str, **patch):
+    """Persist a partial update to the job in Lovable DB (with local fallback in dev)."""
+    try:
+        db_update_job(job_id, patch)
+        return
+    except Exception as e:
+        log_event("WARN", "DB update failed; falling back to local JSON", job_id=job_id, error=str(e))
+
+    # Dev fallback: patch local JSON
     jobs = _read_json(JOBS_FILE, [])
     for j in jobs:
         if j.get("id") == job_id:
@@ -268,7 +319,13 @@ def list_jobs(current: Optional[User] = Depends(get_current_user_optional)):
     """List all jobs (filtered to current user unless PUBLIC_READ)."""
     if not PUBLIC_READ and current is None:
         raise HTTPException(status_code=401, detail="Unauthorized")
-    jobs = _read_json(JOBS_FILE, [])
+
+    try:
+        jobs = db_get_jobs()
+    except Exception as e:
+        log_event("WARN", "DB read failed in /jobs; falling back to local JSON", error=str(e))
+        jobs = _read_json(JOBS_FILE, [])
+
     jobs = _filter_for_user(jobs, current if not PUBLIC_READ else current)
     jobs.sort(key=lambda j: j.get("created_at", ""), reverse=True)
     return jobs
@@ -278,10 +335,16 @@ def status(current: Optional[User] = Depends(get_current_user_optional)):
     """Show summary of job statuses and progress."""
     if not PUBLIC_READ and current is None:
         raise HTTPException(status_code=401, detail="Unauthorized")
-    jobs = _read_json(JOBS_FILE, [])
+
+    try:
+        jobs = db_get_jobs()
+    except Exception as e:
+        log_event("WARN", "DB read failed in /status; falling back to local JSON", error=str(e))
+        jobs = _read_json(JOBS_FILE, [])
+
     jobs = _filter_for_user(jobs, current if not PUBLIC_READ else current)
 
-    summary = {"queued": [], "processing": [], "succeeded": [], "failed": []}
+    summary: Dict[str, List[Dict[str, Any]]] = {"queued": [], "processing": [], "succeeded": [], "failed": []}
     for j in jobs:
         st = j.get("status", "queued")
         if st not in summary:
@@ -304,7 +367,6 @@ def status(current: Optional[User] = Depends(get_current_user_optional)):
             "updated_at": j.get("updated_at"),
         })
     return summary
-
 
 # -----------------------------
 # Local Entry Point
