@@ -52,7 +52,7 @@ def _write_local_jobs(jobs: List[Dict[str, Any]]):
         json.dump(jobs, f, indent=2)
 
 # -------------------------------------------------------------------
-# Main DB API
+# Core DB Operations
 # -------------------------------------------------------------------
 def db_insert_job(data: Dict[str, Any]) -> Dict[str, Any]:
     """Insert a new job record and return it."""
@@ -62,7 +62,6 @@ def db_insert_job(data: Dict[str, Any]) -> Dict[str, Any]:
             return result.data[0]
         raise RuntimeError(f"Failed to insert job: {result}")
     else:
-        # Local fallback
         jobs = _read_local_jobs()
         data["id"] = len(jobs) + 1
         jobs.append(data)
@@ -70,7 +69,7 @@ def db_insert_job(data: Dict[str, Any]) -> Dict[str, Any]:
         return data
 
 def db_update_job(job_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
-    """Update job by ID and return the updated record."""
+    """Update job by ID and return updated record."""
     patch["updated_at"] = now_iso()
     if supabase:
         result = supabase.table("jobs").update(patch).eq("id", job_id).execute()
@@ -78,7 +77,6 @@ def db_update_job(job_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
             return result.data[0]
         raise RuntimeError(f"Update failed for job {job_id}")
     else:
-        # Local fallback
         jobs = _read_local_jobs()
         for j in jobs:
             if str(j.get("id")) == str(job_id):
@@ -103,11 +101,22 @@ def db_get_jobs(limit: int = 100) -> List[Dict[str, Any]]:
         jobs.sort(key=lambda j: j.get("created_at", ""), reverse=True)
         return jobs[-limit:]
 
+def get_job(job_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve one job by ID."""
+    if supabase:
+        result = supabase.table("jobs").select("*").eq("id", job_id).execute()
+        return result.data[0] if result.data else None
+    else:
+        jobs = _read_local_jobs()
+        for j in jobs:
+            if str(j.get("id")) == str(job_id):
+                return j
+        return None
+
 # -------------------------------------------------------------------
-# Compatibility Wrappers (for newer naming convention)
+# Compatibility Wrappers
 # -------------------------------------------------------------------
 def create_job(user_id: str, filename: str, payload: Optional[dict] = None):
-    """Create a job using the new-style helper."""
     data = {
         "user_id": user_id,
         "filename": filename,
@@ -120,11 +129,9 @@ def create_job(user_id: str, filename: str, payload: Optional[dict] = None):
     return db_insert_job(data)
 
 def update_job(job_id: str, **fields):
-    """Alias for db_update_job."""
     return db_update_job(job_id, fields)
 
 def list_jobs(user_id: Optional[str] = None):
-    """Alias for db_get_jobs, optionally filtered by user."""
     jobs = db_get_jobs()
     if user_id:
         jobs = [j for j in jobs if j.get("user_id") == user_id]
