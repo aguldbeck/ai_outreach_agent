@@ -100,7 +100,7 @@ def log_event(level: str, message: str, **extra):
 # -----------------------------
 # App & CORS
 # -----------------------------
-app = FastAPI(title="AI Outreach Agent", version="0.5.1")
+app = FastAPI(title="AI Outreach Agent", version="0.5.2")
 
 app.add_middleware(
     CORSMiddleware,
@@ -121,12 +121,8 @@ app.include_router(auth_router)
 # -----------------------------
 @app.get("/health")
 def health_check():
-    """
-    Lightweight health check for Render uptime monitoring.
-    Confirms the app and filesystem are alive.
-    """
+    """Lightweight health check for Render uptime monitoring."""
     try:
-        # simple sanity check: can we read the jobs log file?
         _ = _read_json(JOBS_FILE, [])
         return {
             "status": "ok",
@@ -308,3 +304,11 @@ def status(current: Optional[User] = Depends(get_current_user_optional)):
             "updated_at": j.get("updated_at"),
         })
     return summary
+
+
+# -----------------------------
+# Local Entry Point
+# -----------------------------
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("server:app", host="0.0.0.0", port=10000, reload=True)
