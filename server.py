@@ -13,7 +13,7 @@ import queue
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -100,16 +100,16 @@ def log_event(level: str, message: str, **extra):
 # FastAPI app and CORS
 # -------------------------------------------------------------------
 ALLOWED_ORIGINS = [
-    os.getenv("FRONTEND_ORIGIN", "https://signal-job.lovable.app"),
     "https://signal-job.lovable.app",
-    "https://*.lovableproject.com",  # wildcard for all Lovable previews
+    "https://c67ff193-6790-48e9-ae0f-339691a82137.lovableproject.com",  # current Lovable preview
+    "https://*.lovableproject.com",  # wildcard for future previews
     "http://localhost:3000",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "https://ai-outreach-agent-fs4e.onrender.com",  # backend self
+    "https://ai-outreach-agent-fs4e.onrender.com",
 ]
 
-app = FastAPI(title="AI Outreach Agent", version="0.9.0")
+app = FastAPI(title="AI Outreach Agent", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -138,7 +138,6 @@ def health_check():
         except Exception as db_err:
             db_ok = False
             log_event("WARN", "Health DB check failed", error=str(db_err))
-
         return {
             "status": "ok",
             "service": "ai_outreach_agent",
@@ -154,12 +153,14 @@ def health_check():
 # Root endpoint
 # -------------------------------------------------------------------
 @app.get("/")
-def root():
+def root(request: Request):
+    origin = request.headers.get("origin")
     return {
         "ok": True,
         "service": "ai_outreach_agent",
         "time": now_iso(),
-        "public_read": PUBLIC_READ
+        "origin": origin,
+        "public_read": PUBLIC_READ,
     }
 
 # -------------------------------------------------------------------
@@ -240,7 +241,6 @@ def process_job(job_id: int):
     if not job:
         log_event("ERROR", "Job not found", job_id=job_id)
         return
-
     try:
         _update_job(job_id, status="processing", updated_at=now_iso(), progress=5)
         filename = job["filename"]
