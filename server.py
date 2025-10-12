@@ -109,7 +109,7 @@ ALLOWED_ORIGINS = [
     "https://ai-outreach-agent-fs4e.onrender.com",
 ]
 
-app = FastAPI(title="AI Outreach Agent", version="1.0.0")
+app = FastAPI(title="AI Outreach Agent", version="1.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -368,6 +368,38 @@ def create_job_endpoint(
     _ensure_worker()
     work_q.put(job_id)
     return {"ok": True, "job_id": job_id, "filename": safe_name, "status": "queued"}
+
+# -------------------------------------------------------------------
+# Retry Queued Jobs
+# -------------------------------------------------------------------
+@app.post("/retry-queued")
+def retry_queued(current: User = Depends(get_current_user)):
+    """
+    Requeue all jobs still marked as 'queued' in the database (or fallback JSON).
+    Useful after a restart or deploy to resume unprocessed jobs.
+    """
+    try:
+        jobs = list_jobs()
+    except Exception as e:
+        log_event("WARN", "DB read failed in /retry-queued; using local fallback", error=str(e))
+        jobs = _read_json(JOBS_FILE, [])
+
+    queued_jobs = [j for j in jobs if j.get("status") == "queued"]
+    if not queued_jobs:
+        return {"ok": True, "message": "No queued jobs found."}
+
+    _ensure_worker()
+    for j in queued_jobs:
+        jid = j.get("id")
+        if jid:
+            work_q.put(jid)
+            log_event("INFO", "Requeued job", job_id=jid)
+
+    return {
+        "ok": True,
+        "message": f"Requeued {len(queued_jobs)} job(s).",
+        "count": len(queued_jobs),
+    }
 
 # -------------------------------------------------------------------
 # Local entry point
