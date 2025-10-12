@@ -1,13 +1,10 @@
 services:
-  # ----------------------------
-  # Primary FastAPI Web Service
-  # ----------------------------
   - type: web
     name: ai-outreach-agent
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
-    plan: free
+    startCommand: uvicorn combined_server:app --host 0.0.0.0 --port $PORT
+    plan: starter
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
@@ -18,28 +15,3 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
-      - key: PUBLIC_READ
-        value: "1"
-
-  # ----------------------------
-  # Background Worker Service
-  # ----------------------------
-  - type: worker
-    name: ai-outreach-agent-worker
-    env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python worker.py
-    plan: free
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.11
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_ANON_KEY
-        sync: false
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: PUBLIC_READ
-        value: "1"
-      - key: WORKER_POLL_INTERVAL
-        value: "30"
