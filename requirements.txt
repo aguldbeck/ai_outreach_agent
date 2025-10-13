@@ -1,8 +1,14 @@
-# Core Framework
+# ============================================================
+# Core Web Framework
+# ============================================================
 fastapi==0.118.0
-uvicorn==0.37.0
+uvicorn[standard]==0.37.0
+starlette==0.48.0
+anyio==4.11.0
 
-# Supabase SDK
+# ============================================================
+# Supabase & Database Client
+# ============================================================
 supabase==2.20.0
 postgrest==2.20.0
 realtime==2.20.0
@@ -10,35 +16,46 @@ storage3==2.20.0
 supabase-auth==2.20.0
 supabase-functions==2.20.0
 
-# OpenAI
-openai==2.0.0
-
-# Utils & Parsing
+# ============================================================
+# Data Processing & File Handling
+# ============================================================
 pandas==2.3.3
 numpy==2.3.3
+openpyxl==3.1.5
 python-multipart==0.0.20
-PyYAML==6.0.3
-requests==2.32.5
+requests==2.32.3
 beautifulsoup4==4.14.2
 tldextract==5.3.0
 
-# Security & Auth
+# ============================================================
+# OpenAI / AI Integration
+# ============================================================
+openai==2.0.0
+
+# ============================================================
+# Auth & Security
+# ============================================================
 PyJWT==2.10.1
 cryptography==46.0.1
-
-# Environment Handling
-python-dotenv==1.0.1
-
-# CLI & Logging
-typer==0.19.2
-rich==14.1.0
-
-# Core Dependencies
-anyio==4.11.0
-starlette==0.48.0
-pydantic==2.11.9
-pydantic_core==2.33.2
-typing_extensions==4.15.0
-python-jose==3.5.0
-passlib==1.7.4
+python-jose==3.3.0
+passlib[bcrypt]==1.7.4
 email-validator==2.3.0
+
+# ============================================================
+# Environment & Config
+# ============================================================
+python-dotenv==1.0.1
+PyYAML==6.0.1
+
+# ============================================================
+# CLI / Logging / Dev Utilities
+# ============================================================
+typer==0.9.0
+rich==13.9.2
+
+# ============================================================
+# Compatibility / Typing
+# ============================================================
+pydantic==2.11.1
+pydantic-core==2.33.2
+typing_extensions==4.12.2

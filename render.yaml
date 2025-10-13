@@ -2,16 +2,21 @@ services:
   - type: web
     name: ai-outreach-agent
     env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn combined_server:app --host 0.0.0.0 --port $PORT
-    plan: starter
+    plan: free  # or 'starter' if you need >512 MB RAM
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    autoDeploy: true
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
         value: 3.11
       - key: SUPABASE_URL
         sync: false
-      - key: SUPABASE_ANON_KEY
+      - key: SUPABASE_SERVICE_KEY
         sync: false
-      - key: OPENAI_API_KEY
+      - key: SUPABASE_BUCKET
+        value: job-uploads
+      - key: PUBLIC_READ
+        value: "1"
+      - key: RETRY_API_KEY
         sync: false
