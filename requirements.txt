@@ -58,4 +58,4 @@ rich==13.9.2
 # ============================================================
 pydantic==2.12.0
 pydantic-core==2.41.1
-typing_extensions==4.12.2
+typing_extensions==4.14.1
