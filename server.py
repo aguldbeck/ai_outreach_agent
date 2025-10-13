@@ -13,7 +13,7 @@ import queue
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Request, Header
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Request, Header, Path
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -50,7 +50,7 @@ _ensure_json(LOG_FILE, [])
 
 load_dotenv()
 PUBLIC_READ = os.getenv("PUBLIC_READ", "1") == "1"
-RETRY_API_KEY = os.getenv("RETRY_API_KEY", "")
+RETRY_API_KEY = (os.getenv("RETRY_API_KEY") or "").strip()
 
 # -------------------------------------------------------------------
 # Models
@@ -101,9 +101,9 @@ def log_event(level: str, message: str, **extra):
 # -------------------------------------------------------------------
 # FastAPI app and middleware
 # -------------------------------------------------------------------
-app = FastAPI(title="AI Outreach Agent", version="1.2.0")
+app = FastAPI(title="AI Outreach Agent", version="1.3.0")
 
-# Wildcard CORS regex (covers all lovable.app and lovableproject.com previews)
+# Wildcard CORS regex (covers lovable.app / lovableproject.com and localhost)
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r"^https:\/\/([a-z0-9-]+\.)?(lovable\.app|lovableproject\.com)$|^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$",
@@ -122,6 +122,46 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         return response
 
 app.add_middleware(RequestIDMiddleware)
+
+# Temporary debug: log headers for retry endpoints to Render logs
+@app.middleware("http")
+async def _debug_log_retry_headers(request: Request, call_next):
+    p = request.url.path
+    if p == "/retry-queued" or p.startswith("/retry-job"):
+        print("\n=== RETRY DEBUG: INCOMING HEADERS ===")
+        try:
+            for k, v in request.headers.items():
+                print(f"{k}: {v}")
+        except Exception as e:
+            print(f"(header print error: {e})")
+        print("=== RETRY DEBUG: END HEADERS ===\n")
+    return await call_next(request)
+
+# Helper: extract retry key from headers (tolerant)
+def _extract_retry_key(request: Request, x_api_key_header: Optional[str]) -> Optional[str]:
+    """
+    Tries (in order):
+      1) Explicit Header param (x_api_key_header)
+      2) Raw 'x-api-key' or 'X-API-Key' in request.headers (case-insensitive)
+      3) Authorization: Bearer <key>
+    Returns a stripped string or None.
+    """
+    if x_api_key_header:
+        k = x_api_key_header.strip()
+        if k:
+            return k
+
+    # Direct lookup (starlette headers are case-insensitive)
+    hdr = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
+    if hdr and hdr.strip():
+        return hdr.strip()
+
+    # Authorization: Bearer <key>
+    auth = request.headers.get("authorization") or request.headers.get("Authorization")
+    if auth and auth.strip().lower().startswith("bearer "):
+        return auth.strip()[7:].strip()
+
+    return None
 
 # -------------------------------------------------------------------
 # Routers
@@ -146,6 +186,7 @@ def health_check():
             "time": now_iso(),
             "public_read": PUBLIC_READ,
             "db_ok": db_ok,
+            "retry_api_key_set": bool(RETRY_API_KEY),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Health check failed: {e}")
@@ -372,8 +413,16 @@ def create_job_endpoint(
 # Retry Endpoints (API-key protected)
 # -------------------------------------------------------------------
 @app.post("/retry-queued")
-def retry_queued(x_api_key: str = Header(None)):
-    if not RETRY_API_KEY or x_api_key != RETRY_API_KEY:
+def retry_queued(
+    request: Request,
+    x_api_key: Optional[str] = Header(default=None)
+):
+    if not RETRY_API_KEY:
+        raise HTTPException(status_code=500, detail="RETRY_API_KEY is not set on the server")
+
+    supplied = _extract_retry_key(request, x_api_key)
+    if not supplied or supplied != RETRY_API_KEY:
+        # Uniform error string so you can grep logs easily
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     try:
@@ -396,8 +445,16 @@ def retry_queued(x_api_key: str = Header(None)):
     return {"ok": True, "message": f"Requeued {len(queued)} job(s).", "count": len(queued)}
 
 @app.post("/retry-job/{job_id}")
-def retry_job(job_id: int, x_api_key: str = Header(None)):
-    if not RETRY_API_KEY or x_api_key != RETRY_API_KEY:
+def retry_job(
+    request: Request,
+    job_id: int = Path(...),
+    x_api_key: Optional[str] = Header(default=None),
+):
+    if not RETRY_API_KEY:
+        raise HTTPException(status_code=500, detail="RETRY_API_KEY is not set on the server")
+
+    supplied = _extract_retry_key(request, x_api_key)
+    if not supplied or supplied != RETRY_API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     job = _get_job_by_id(job_id)
