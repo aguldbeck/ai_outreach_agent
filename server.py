@@ -13,11 +13,12 @@ import queue
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Request
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from starlette.middleware.base import BaseHTTPMiddleware
 
 # Internal imports
 from parser import read_input_file, validate_columns
@@ -49,6 +50,7 @@ _ensure_json(LOG_FILE, [])
 
 load_dotenv()
 PUBLIC_READ = os.getenv("PUBLIC_READ", "1") == "1"
+RETRY_API_KEY = os.getenv("RETRY_API_KEY", "")
 
 # -------------------------------------------------------------------
 # Models
@@ -97,28 +99,29 @@ def log_event(level: str, message: str, **extra):
     _write_json(LOG_FILE, logs)
 
 # -------------------------------------------------------------------
-# FastAPI app and CORS
+# FastAPI app and middleware
 # -------------------------------------------------------------------
-ALLOWED_ORIGINS = [
-    "https://signal-job.lovable.app",
-    "https://c67ff193-6790-48e9-ae0f-339691a82137.lovableproject.com",  # current Lovable preview
-    "https://*.lovableproject.com",  # wildcard for future previews
-    "http://localhost:3000",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "https://ai-outreach-agent-fs4e.onrender.com",
-]
+app = FastAPI(title="AI Outreach Agent", version="1.2.0")
 
-app = FastAPI(title="AI Outreach Agent", version="1.1.0")
-
+# Wildcard CORS regex (covers all lovable.app and lovableproject.com previews)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=r"^https:\/\/([a-z0-9-]+\.)?(lovable\.app|lovableproject\.com)$|^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["Content-Disposition"],
 )
+
+# Request ID middleware for traceability
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        req_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = req_id
+        return response
+
+app.add_middleware(RequestIDMiddleware)
 
 # -------------------------------------------------------------------
 # Routers
@@ -130,7 +133,6 @@ app.include_router(auth_router)
 # -------------------------------------------------------------------
 @app.get("/health")
 def health_check():
-    """Lightweight health check for uptime and DB connectivity."""
     try:
         db_ok = True
         try:
@@ -144,7 +146,6 @@ def health_check():
             "time": now_iso(),
             "public_read": PUBLIC_READ,
             "db_ok": db_ok,
-            "allowed_origins": ALLOWED_ORIGINS,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Health check failed: {e}")
@@ -154,12 +155,11 @@ def health_check():
 # -------------------------------------------------------------------
 @app.get("/")
 def root(request: Request):
-    origin = request.headers.get("origin")
     return {
         "ok": True,
         "service": "ai_outreach_agent",
         "time": now_iso(),
-        "origin": origin,
+        "origin": request.headers.get("origin"),
         "public_read": PUBLIC_READ,
     }
 
@@ -168,7 +168,6 @@ def root(request: Request):
 # -------------------------------------------------------------------
 @app.get("/downloads/sample")
 def download_sample():
-    """Provide downloadable CSV template."""
     if not os.path.exists(SAMPLE_FILE):
         with open(SAMPLE_FILE, "w", newline="") as f:
             f.write(
@@ -180,7 +179,6 @@ def download_sample():
 
 @app.get("/downloads/{filename}")
 def download_output(filename: str):
-    """Allow users to download their processed output file."""
     path = os.path.join(OUTPUTS_DIR, filename)
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="File not found")
@@ -210,7 +208,6 @@ def csv_copy(src: str, dst: str):
     shutil.copyfile(src, dst)
 
 def csv_with_extra_columns(src: str, dst: str, extra_headers: List[str], extra_vals: List[str]):
-    """Add placeholder enrichment columns."""
     with open(src, newline="", encoding="utf-8") as fin:
         rows = list(csv.reader(fin))
     if not rows:
@@ -223,7 +220,6 @@ def csv_with_extra_columns(src: str, dst: str, extra_headers: List[str], extra_v
         csv.writer(fout).writerows(out)
 
 def _get_job_by_id(job_id: int) -> Optional[Dict[str, Any]]:
-    """Fetch one job from DB or fallback JSON."""
     try:
         j = get_job(job_id)
         if j:
@@ -236,13 +232,19 @@ def _get_job_by_id(job_id: int) -> Optional[Dict[str, Any]]:
     return None
 
 def process_job(job_id: int):
-    """Simulate enrichment pipeline."""
     job = _get_job_by_id(job_id)
     if not job:
         log_event("ERROR", "Job not found", job_id=job_id)
         return
+
+    if job.get("status") == "succeeded":
+        log_event("INFO", "Skip already-succeeded job", job_id=job_id)
+        return
+
     try:
-        _update_job(job_id, status="processing", updated_at=now_iso(), progress=5)
+        if job.get("status") != "processing":
+            _update_job(job_id, status="processing", updated_at=now_iso(), progress=5)
+
         filename = job["filename"]
         base = os.path.splitext(filename)[0]
         upload_path = os.path.join(UPLOADS_DIR, filename)
@@ -290,7 +292,6 @@ def _filter_for_user(rows: List[Dict[str, Any]], user: Optional[User]) -> List[D
 
 @app.get("/jobs")
 def list_jobs_endpoint(current: Optional[User] = Depends(get_current_user_optional)):
-    """List all jobs (filtered by user unless PUBLIC_READ)."""
     if not PUBLIC_READ and current is None:
         raise HTTPException(status_code=401, detail="Unauthorized")
     try:
@@ -304,7 +305,6 @@ def list_jobs_endpoint(current: Optional[User] = Depends(get_current_user_option
 
 @app.get("/status")
 def status(current: Optional[User] = Depends(get_current_user_optional)):
-    """Summarize job statuses."""
     if not PUBLIC_READ and current is None:
         raise HTTPException(status_code=401, detail="Unauthorized")
     try:
@@ -328,7 +328,6 @@ def create_job_endpoint(
     notes: Optional[str] = Form(None),
     current: User = Depends(get_current_user)
 ):
-    """Upload CSV, create DB job row, and queue for processing."""
     if not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Please upload a .csv file.")
 
@@ -370,36 +369,48 @@ def create_job_endpoint(
     return {"ok": True, "job_id": job_id, "filename": safe_name, "status": "queued"}
 
 # -------------------------------------------------------------------
-# Retry Queued Jobs
+# Retry Endpoints (API-key protected)
 # -------------------------------------------------------------------
 @app.post("/retry-queued")
-def retry_queued(current: User = Depends(get_current_user)):
-    """
-    Requeue all jobs still marked as 'queued' in the database (or fallback JSON).
-    Useful after a restart or deploy to resume unprocessed jobs.
-    """
+def retry_queued(x_api_key: str = Header(None)):
+    if not RETRY_API_KEY or x_api_key != RETRY_API_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
     try:
         jobs = list_jobs()
     except Exception as e:
         log_event("WARN", "DB read failed in /retry-queued; using local fallback", error=str(e))
         jobs = _read_json(JOBS_FILE, [])
 
-    queued_jobs = [j for j in jobs if j.get("status") == "queued"]
-    if not queued_jobs:
-        return {"ok": True, "message": "No queued jobs found."}
+    queued = [j for j in jobs if j.get("status") == "queued"]
+    if not queued:
+        return {"ok": True, "message": "No queued jobs found.", "count": 0}
 
     _ensure_worker()
-    for j in queued_jobs:
+    for j in queued:
         jid = j.get("id")
         if jid:
             work_q.put(jid)
             log_event("INFO", "Requeued job", job_id=jid)
 
-    return {
-        "ok": True,
-        "message": f"Requeued {len(queued_jobs)} job(s).",
-        "count": len(queued_jobs),
-    }
+    return {"ok": True, "message": f"Requeued {len(queued)} job(s).", "count": len(queued)}
+
+@app.post("/retry-job/{job_id}")
+def retry_job(job_id: int, x_api_key: str = Header(None)):
+    if not RETRY_API_KEY or x_api_key != RETRY_API_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    job = _get_job_by_id(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.get("status") not in {"queued", "failed"}:
+        return {"ok": False, "message": f"Job {job_id} is {job.get('status')}, not retried."}
+
+    _ensure_worker()
+    work_q.put(job_id)
+    log_event("INFO", "Requeued single job", job_id=job_id)
+    return {"ok": True, "message": f"Job {job_id} requeued."}
 
 # -------------------------------------------------------------------
 # Local entry point
