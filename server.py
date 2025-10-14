@@ -1,7 +1,6 @@
 # server.py
 # FastAPI server for AI Outreach Agent
-# Handles job management, CSV processing, and background worker
-# Authentication is handled via auth.py (JWT-based)
+# Integrated with Supabase Storage for file handling and background worker
 
 import os
 import csv
@@ -12,6 +11,9 @@ import threading
 import queue
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
+from io import BytesIO
+import requests
+import openpyxl
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Request, Header, Path
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,15 +21,17 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from starlette.middleware.base import BaseHTTPMiddleware
+from supabase import create_client
 
-# Internal imports
 from parser import read_input_file, validate_columns
 from auth import router as auth_router, get_current_user, get_current_user_optional, User
 from app.db_helper import create_job, update_job, get_job, list_jobs
 
 # -------------------------------------------------------------------
-# Setup and paths
+# Setup and configuration
 # -------------------------------------------------------------------
+APP_VERSION = "1.4.2 — Fixed API key + worker trigger"
+
 ROOT = os.getcwd()
 UPLOADS_DIR = os.path.join(ROOT, "uploads")
 OUTPUTS_DIR = os.path.join(ROOT, "outputs")
@@ -52,6 +56,15 @@ load_dotenv()
 PUBLIC_READ = os.getenv("PUBLIC_READ", "1") == "1"
 RETRY_API_KEY = (os.getenv("RETRY_API_KEY") or "").strip()
 
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "job-uploads")
+
+if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+    raise RuntimeError("Supabase credentials are missing from environment variables.")
+
+supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
 # -------------------------------------------------------------------
 # Models
 # -------------------------------------------------------------------
@@ -74,7 +87,7 @@ class TargetingCriteria(BaseModel):
     regions: Optional[List[str]] = []
 
 # -------------------------------------------------------------------
-# Utility helpers
+# Utility
 # -------------------------------------------------------------------
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -97,13 +110,13 @@ def log_event(level: str, message: str, **extra):
         entry.update(extra)
     logs.append(entry)
     _write_json(LOG_FILE, logs)
+    print(f"[{level}] {message} {extra if extra else ''}")  # also log to console for Render
 
 # -------------------------------------------------------------------
-# FastAPI app and middleware
+# FastAPI app + middleware
 # -------------------------------------------------------------------
-app = FastAPI(title="AI Outreach Agent", version="1.3.0")
+app = FastAPI(title="AI Outreach Agent", version=APP_VERSION)
 
-# Wildcard CORS regex (covers lovable.app / lovableproject.com and localhost)
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r"^https:\/\/([a-z0-9-]+\.)?(lovable\.app|lovableproject\.com)$|^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$",
@@ -113,7 +126,6 @@ app.add_middleware(
     expose_headers=["Content-Disposition"],
 )
 
-# Request ID middleware for traceability
 class RequestIDMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         req_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
@@ -122,54 +134,10 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         return response
 
 app.add_middleware(RequestIDMiddleware)
-
-# Temporary debug: log headers for retry endpoints to Render logs
-@app.middleware("http")
-async def _debug_log_retry_headers(request: Request, call_next):
-    p = request.url.path
-    if p == "/retry-queued" or p.startswith("/retry-job"):
-        print("\n=== RETRY DEBUG: INCOMING HEADERS ===")
-        try:
-            for k, v in request.headers.items():
-                print(f"{k}: {v}")
-        except Exception as e:
-            print(f"(header print error: {e})")
-        print("=== RETRY DEBUG: END HEADERS ===\n")
-    return await call_next(request)
-
-# Helper: extract retry key from headers (tolerant)
-def _extract_retry_key(request: Request, x_api_key_header: Optional[str]) -> Optional[str]:
-    """
-    Tries (in order):
-      1) Explicit Header param (x_api_key_header)
-      2) Raw 'x-api-key' or 'X-API-Key' in request.headers (case-insensitive)
-      3) Authorization: Bearer <key>
-    Returns a stripped string or None.
-    """
-    if x_api_key_header:
-        k = x_api_key_header.strip()
-        if k:
-            return k
-
-    # Direct lookup (starlette headers are case-insensitive)
-    hdr = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
-    if hdr and hdr.strip():
-        return hdr.strip()
-
-    # Authorization: Bearer <key>
-    auth = request.headers.get("authorization") or request.headers.get("Authorization")
-    if auth and auth.strip().lower().startswith("bearer "):
-        return auth.strip()[7:].strip()
-
-    return None
-
-# -------------------------------------------------------------------
-# Routers
-# -------------------------------------------------------------------
 app.include_router(auth_router)
 
 # -------------------------------------------------------------------
-# Health Check
+# Health check
 # -------------------------------------------------------------------
 @app.get("/health")
 def health_check():
@@ -183,6 +151,7 @@ def health_check():
         return {
             "status": "ok",
             "service": "ai_outreach_agent",
+            "version": APP_VERSION,
             "time": now_iso(),
             "public_read": PUBLIC_READ,
             "db_ok": db_ok,
@@ -190,40 +159,6 @@ def health_check():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Health check failed: {e}")
-
-# -------------------------------------------------------------------
-# Root endpoint
-# -------------------------------------------------------------------
-@app.get("/")
-def root(request: Request):
-    return {
-        "ok": True,
-        "service": "ai_outreach_agent",
-        "time": now_iso(),
-        "origin": request.headers.get("origin"),
-        "public_read": PUBLIC_READ,
-    }
-
-# -------------------------------------------------------------------
-# Downloads
-# -------------------------------------------------------------------
-@app.get("/downloads/sample")
-def download_sample():
-    if not os.path.exists(SAMPLE_FILE):
-        with open(SAMPLE_FILE, "w", newline="") as f:
-            f.write(
-                "name,company,job_title,linkedin_url,email,notes\n"
-                "Jane Doe,Example Inc,Marketing Manager,https://linkedin.com/in/janedoe,"
-                "jane@example.com,Interested in retention tools\n"
-            )
-    return FileResponse(SAMPLE_FILE, filename="sample_template.csv", media_type="text/csv")
-
-@app.get("/downloads/{filename}")
-def download_output(filename: str):
-    path = os.path.join(OUTPUTS_DIR, filename)
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(path, filename=filename)
 
 # -------------------------------------------------------------------
 # Background worker
@@ -236,6 +171,7 @@ def _ensure_worker():
     if not _worker_started:
         threading.Thread(target=_worker_loop, daemon=True).start()
         _worker_started = True
+        log_event("INFO", "Worker thread started")
 
 def _worker_loop():
     while True:
@@ -244,21 +180,6 @@ def _worker_loop():
             process_job(jid)
         finally:
             work_q.task_done()
-
-def csv_copy(src: str, dst: str):
-    shutil.copyfile(src, dst)
-
-def csv_with_extra_columns(src: str, dst: str, extra_headers: List[str], extra_vals: List[str]):
-    with open(src, newline="", encoding="utf-8") as fin:
-        rows = list(csv.reader(fin))
-    if not rows:
-        rows = [[]]
-    header = rows[0]
-    body = rows[1:]
-    header = header + extra_headers
-    out = [header] + [r + extra_vals for r in body]
-    with open(dst, "w", newline="", encoding="utf-8") as fout:
-        csv.writer(fout).writerows(out)
 
 def _get_job_by_id(job_id: int) -> Optional[Dict[str, Any]]:
     try:
@@ -283,30 +204,30 @@ def process_job(job_id: int):
         return
 
     try:
-        if job.get("status") != "processing":
-            _update_job(job_id, status="processing", updated_at=now_iso(), progress=5)
-
+        _update_job(job_id, status="processing", updated_at=now_iso(), progress=5)
         filename = job["filename"]
-        base = os.path.splitext(filename)[0]
-        upload_path = os.path.join(UPLOADS_DIR, filename)
-        p1 = os.path.join(OUTPUTS_DIR, f"{base}_{job_id}_stage1.csv")
-        p2 = os.path.join(OUTPUTS_DIR, f"{base}_{job_id}_stage2.csv")
-        p3 = os.path.join(OUTPUTS_DIR, f"{base}_{job_id}_stage3.csv")
+        file_url = job.get("file_url")
 
-        csv_copy(upload_path, p1)
-        _update_job(job_id, progress=35)
-        csv_with_extra_columns(p1, p2, ["post_1", "post_2", "post_3"], ["(p1)", "(p2)", "(p3)"])
-        _update_job(job_id, progress=65)
-        csv_with_extra_columns(
-            p2, p3,
-            ["email_subject", "email_body"],
-            [
-                "Quick idea to boost retention",
-                "Hi {first_name}, saw your work at {company_name}. Open to a quick audit?",
-            ],
-        )
-        _update_job(job_id, status="succeeded", progress=100, output_url=f"/downloads/{os.path.basename(p3)}")
-        log_event("INFO", "Job succeeded", job_id=job_id)
+        if not file_url:
+            raise Exception("Missing file_url for job")
+
+        log_event("INFO", "Downloading file from Supabase", job_id=job_id, file_url=file_url)
+        response = requests.get(file_url)
+        response.raise_for_status()
+        data = BytesIO(response.content)
+
+        wb = openpyxl.load_workbook(data)
+        sheet = wb.active
+        sheet["A1"].value = "Processed OK"
+        processed_name = f"processed_{filename}"
+        local_path = os.path.join(OUTPUTS_DIR, processed_name)
+        wb.save(local_path)
+
+        supabase.storage.from_(SUPABASE_BUCKET).upload(f"processed/{processed_name}", open(local_path, "rb"))
+        output_url = supabase.storage.from_(SUPABASE_BUCKET).get_public_url(f"processed/{processed_name}")
+
+        _update_job(job_id, status="succeeded", progress=100, output_url=output_url)
+        log_event("INFO", "Job succeeded", job_id=job_id, output_url=output_url)
     except Exception as e:
         _update_job(job_id, status="failed", error=str(e))
         log_event("ERROR", "Job failed", job_id=job_id, error=str(e))
@@ -324,44 +245,7 @@ def _update_job(job_id: int, **patch):
         _write_json(JOBS_FILE, jobs)
 
 # -------------------------------------------------------------------
-# Jobs endpoints
-# -------------------------------------------------------------------
-def _filter_for_user(rows: List[Dict[str, Any]], user: Optional[User]) -> List[Dict[str, Any]]:
-    if user is None:
-        return rows
-    return [r for r in rows if str(r.get("user_id")) == str(user.id)]
-
-@app.get("/jobs")
-def list_jobs_endpoint(current: Optional[User] = Depends(get_current_user_optional)):
-    if not PUBLIC_READ and current is None:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    try:
-        rows = list_jobs()
-    except Exception as e:
-        log_event("WARN", "DB read failed in /jobs", error=str(e))
-        rows = _read_json(JOBS_FILE, [])
-    rows = _filter_for_user(rows, current)
-    rows.sort(key=lambda j: j.get("created_at", ""), reverse=True)
-    return rows
-
-@app.get("/status")
-def status(current: Optional[User] = Depends(get_current_user_optional)):
-    if not PUBLIC_READ and current is None:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    try:
-        rows = list_jobs()
-    except Exception as e:
-        log_event("WARN", "DB read failed in /status", error=str(e))
-        rows = _read_json(JOBS_FILE, [])
-    rows = _filter_for_user(rows, current)
-    summary = {"queued": [], "processing": [], "succeeded": [], "failed": []}
-    for j in rows:
-        st = j.get("status", "queued")
-        summary.setdefault(st, []).append(j)
-    return summary
-
-# -------------------------------------------------------------------
-# Upload & Create Job
+# Upload + Create Job
 # -------------------------------------------------------------------
 @app.post("/jobs")
 def create_job_endpoint(
@@ -369,92 +253,73 @@ def create_job_endpoint(
     notes: Optional[str] = Form(None),
     current: User = Depends(get_current_user)
 ):
-    if not file.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=400, detail="Please upload a .csv file.")
-
     safe_name = f"{uuid.uuid4().hex}_{os.path.basename(file.filename)}"
-    upload_path = os.path.join(UPLOADS_DIR, safe_name)
-    with open(upload_path, "wb") as out:
-        out.write(file.file.read())
+    contents = file.file.read()
     file.file.close()
 
     try:
-        df = read_input_file(upload_path)
-        validate_columns(df)
+        supabase.storage.from_(SUPABASE_BUCKET).upload(f"jobs/{safe_name}", contents)
+        file_url = supabase.storage.from_(SUPABASE_BUCKET).get_public_url(f"jobs/{safe_name}")
     except Exception as e:
-        os.remove(upload_path)
-        raise HTTPException(status_code=400, detail=f"Invalid CSV: {e}")
+        raise HTTPException(status_code=500, detail=f"Upload to Supabase failed: {e}")
 
     payload = {"notes": notes or ""}
-    try:
-        job = create_job(user_id=str(current.id), filename=safe_name, payload=payload)
-        job_id = job.get("id", None)
-    except Exception as e:
-        log_event("WARN", "DB insert failed; using local JSON", error=str(e))
-        jobs = _read_json(JOBS_FILE, [])
-        job_id = (max([j.get("id", 0) for j in jobs], default=0) or 0) + 1
-        jobs.append({
-            "id": job_id,
-            "user_id": str(current.id),
-            "filename": safe_name,
-            "status": "queued",
-            "progress": 0,
-            "payload": payload,
-            "created_at": now_iso(),
-            "updated_at": now_iso(),
-        })
-        _write_json(JOBS_FILE, jobs)
+    job = create_job(user_id=str(current.id), filename=safe_name, payload=payload, file_url=file_url)
+    job_id = job.get("id")
 
     _ensure_worker()
     work_q.put(job_id)
-    return {"ok": True, "job_id": job_id, "filename": safe_name, "status": "queued"}
+    log_event("INFO", "Job created and queued", job_id=job_id, filename=safe_name)
+
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "filename": safe_name,
+        "file_url": file_url,
+        "status": "queued"
+    }
 
 # -------------------------------------------------------------------
-# Retry Endpoints (API-key protected)
+# Retry endpoints (Fixed x-api-key + Authorization)
 # -------------------------------------------------------------------
 @app.post("/retry-queued")
-def retry_queued(
-    request: Request,
-    x_api_key: Optional[str] = Header(default=None)
-):
-    if not RETRY_API_KEY:
-        raise HTTPException(status_code=500, detail="RETRY_API_KEY is not set on the server")
+def retry_queued(request: Request, x_api_key: Optional[str] = Header(default=None)):
+    # Accept both Authorization: Bearer and x-api-key headers
+    supplied = (
+        request.headers.get("authorization", "")
+        .replace("Bearer ", "")
+        .strip()
+        or x_api_key
+        or ""
+    )
 
-    supplied = _extract_retry_key(request, x_api_key)
-    if not supplied or supplied != RETRY_API_KEY:
-        # Uniform error string so you can grep logs easily
+    if supplied != RETRY_API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    try:
-        jobs = list_jobs()
-    except Exception as e:
-        log_event("WARN", "DB read failed in /retry-queued; using local fallback", error=str(e))
-        jobs = _read_json(JOBS_FILE, [])
-
+    jobs = list_jobs()
     queued = [j for j in jobs if j.get("status") == "queued"]
     if not queued:
+        log_event("INFO", "No queued jobs found")
         return {"ok": True, "message": "No queued jobs found.", "count": 0}
 
     _ensure_worker()
     for j in queued:
-        jid = j.get("id")
-        if jid:
-            work_q.put(jid)
-            log_event("INFO", "Requeued job", job_id=jid)
+        work_q.put(j["id"])
 
+    log_event("INFO", f"Requeued {len(queued)} jobs", count=len(queued))
     return {"ok": True, "message": f"Requeued {len(queued)} job(s).", "count": len(queued)}
 
 @app.post("/retry-job/{job_id}")
-def retry_job(
-    request: Request,
-    job_id: int = Path(...),
-    x_api_key: Optional[str] = Header(default=None),
-):
-    if not RETRY_API_KEY:
-        raise HTTPException(status_code=500, detail="RETRY_API_KEY is not set on the server")
+def retry_job(request: Request, job_id: int = Path(...), x_api_key: Optional[str] = Header(default=None)):
+    supplied = (
+        request.headers.get("authorization", "")
+        .replace("Bearer ", "")
+        .strip()
+        or x_api_key
+        or ""
+    )
 
-    supplied = _extract_retry_key(request, x_api_key)
-    if not supplied or supplied != RETRY_API_KEY:
+    if supplied != RETRY_API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     job = _get_job_by_id(job_id)
@@ -466,7 +331,8 @@ def retry_job(
 
     _ensure_worker()
     work_q.put(job_id)
-    log_event("INFO", "Requeued single job", job_id=job_id)
+    log_event("INFO", f"Manually retried job {job_id}")
+
     return {"ok": True, "message": f"Job {job_id} requeued."}
 
 # -------------------------------------------------------------------
