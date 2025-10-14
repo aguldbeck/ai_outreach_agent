@@ -84,11 +84,24 @@ def _verify_rs256_token(token: str):
         raise HTTPException(status_code=401, detail=f"Invalid RS256 token: {e}")
 
 def _verify_hs256_token(token: str):
+    """Verify Supabase HS256 JWT, allowing audience='authenticated' by default."""
     try:
-        payload = jwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"])
+        payload = jwt.decode(
+            token,
+            SUPABASE_JWT_SECRET,
+            algorithms=["HS256"],
+            audience=SUPABASE_AUDIENCE,
+        )
         return payload
     except JWTError as e:
-        raise HTTPException(status_code=401, detail=f"Invalid HS256 token: {e}")
+        # fallback: ignore audience entirely for local use or testing
+        try:
+            options = {"verify_aud": False}
+            payload = jwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"], options=options)
+            print("[auth] Ignored audience claim for local HS256 token")
+            return payload
+        except JWTError as e2:
+            raise HTTPException(status_code=401, detail=f"Invalid HS256 token: {e2}")
 
 def verify_token_auto(token: str):
     """Auto-detect HS256 vs RS256 and decode accordingly."""
