@@ -26,7 +26,13 @@ JWT_SECRET = os.getenv("JWT_SECRET", "change-me-secret")  # fallback HS256 for l
 JWT_ALGO = os.getenv("JWT_ALGO", "HS256")
 JWT_EXPIRES_MIN = int(os.getenv("JWT_EXPIRES_MIN", "120"))
 
-SUPABASE_PROJECT_REF = os.getenv("SUPABASE_PROJECT_REF", "").strip()
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
+SUPABASE_PROJECT_REF = (
+    SUPABASE_URL.split("//")[1].split(".")[0]
+    if SUPABASE_URL.startswith("https://")
+    else os.getenv("SUPABASE_PROJECT_REF", "").strip()
+)
+
 SUPABASE_ISSUER = f"https://{SUPABASE_PROJECT_REF}.supabase.co/auth/v1" if SUPABASE_PROJECT_REF else ""
 SUPABASE_JWKS_URL = f"{SUPABASE_ISSUER}/keys" if SUPABASE_PROJECT_REF else ""
 SUPABASE_AUDIENCE = os.getenv("SUPABASE_AUDIENCE", "authenticated")
@@ -89,10 +95,14 @@ def _load_jwks() -> Dict[str, Any]:
     now = time.time()
     if not _JWKS_CACHE or (now - _JWKS_FETCHED_AT) > _JWKS_TTL:
         print(f"DEBUG: Fetching JWKS from {SUPABASE_JWKS_URL}")
-        resp = requests.get(SUPABASE_JWKS_URL, timeout=10)
-        resp.raise_for_status()
-        _JWKS_CACHE = resp.json()
-        _JWKS_FETCHED_AT = now
+        try:
+            resp = requests.get(SUPABASE_JWKS_URL, timeout=10)
+            resp.raise_for_status()
+            _JWKS_CACHE = resp.json()
+            _JWKS_FETCHED_AT = now
+        except Exception as e:
+            print("DEBUG: Failed to fetch JWKS:", e)
+            raise HTTPException(401, f"JWKS fetch failed: {e}")
     return _JWKS_CACHE
 
 def _verify_supabase_token(token: str) -> Dict[str, Any]:
@@ -196,7 +206,13 @@ def get_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> User:
     print("DEBUG: Incoming token:", token[:40] if token else None)
     if not token:
         raise _cred_exc()
-    user = _try_supabase(token) or _try_local(token)
+    user = None
+    try:
+        user = _try_supabase(token)
+    except Exception as e:
+        print("DEBUG: Supabase check failed, falling back to local:", e)
+    if not user:
+        user = _try_local(token)
     if not user:
         print("DEBUG: Token failed validation in both paths.")
         raise _cred_exc()
