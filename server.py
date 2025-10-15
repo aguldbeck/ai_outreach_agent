@@ -3,10 +3,8 @@
 # Integrated with Supabase Storage for file handling and background worker
 
 import os
-import csv
 import json
 import uuid
-import shutil
 import threading
 import queue
 from datetime import datetime, timezone
@@ -17,20 +15,19 @@ import openpyxl
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Request, Header, Path
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from starlette.middleware.base import BaseHTTPMiddleware
 from supabase import create_client
 
 from parser import read_input_file, validate_columns
-from auth import router as auth_router, get_current_user, get_current_user_optional, User
+from auth import router as auth_router, get_current_user, User
 from app.db_helper import create_job, update_job, get_job, list_jobs
 
 # -------------------------------------------------------------------
 # Setup and configuration
 # -------------------------------------------------------------------
-APP_VERSION = "1.4.2 — Fixed API key + worker trigger"
+APP_VERSION = "1.4.3 — Stable CORS + file_url compatibility"
 
 ROOT = os.getcwd()
 UPLOADS_DIR = os.path.join(ROOT, "uploads")
@@ -38,7 +35,6 @@ OUTPUTS_DIR = os.path.join(ROOT, "outputs")
 DOWNLOADS_DIR = os.path.join(ROOT, "downloads")
 LOG_FILE = os.path.join(ROOT, "logging.json")
 JOBS_FILE = os.path.join(ROOT, "jobs.json")
-SAMPLE_FILE = os.path.join(ROOT, "sample_template.csv")
 
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 os.makedirs(OUTPUTS_DIR, exist_ok=True)
@@ -110,7 +106,7 @@ def log_event(level: str, message: str, **extra):
         entry.update(extra)
     logs.append(entry)
     _write_json(LOG_FILE, logs)
-    print(f"[{level}] {message} {extra if extra else ''}")  # also log to console for Render
+    print(f"[{level}] {message} {extra if extra else ''}")
 
 # -------------------------------------------------------------------
 # FastAPI app + middleware
@@ -119,7 +115,13 @@ app = FastAPI(title="AI Outreach Agent", version=APP_VERSION)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"^https:\/\/([a-z0-9-]+\.)?(lovable\.app|lovableproject\.com)$|^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_origins=[
+        "https://signal-job.lovable.app",
+        "https://lovable.app",
+        "https://lovableproject.com",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -264,7 +266,18 @@ def create_job_endpoint(
         raise HTTPException(status_code=500, detail=f"Upload to Supabase failed: {e}")
 
     payload = {"notes": notes or ""}
-    job = create_job(user_id=str(current.id), filename=safe_name, payload=payload, file_url=file_url)
+    try:
+        job = create_job(
+            user_id=str(current.id),
+            filename=safe_name,
+            payload=payload,
+            file_url=file_url,
+        )
+    except TypeError:
+        # fallback if older db_helper version missing file_url param
+        job = create_job(user_id=str(current.id), filename=safe_name, payload=payload)
+        update_job(job.get("id"), file_url=file_url)
+
     job_id = job.get("id")
 
     _ensure_worker()
@@ -276,15 +289,14 @@ def create_job_endpoint(
         "job_id": job_id,
         "filename": safe_name,
         "file_url": file_url,
-        "status": "queued"
+        "status": "queued",
     }
 
 # -------------------------------------------------------------------
-# Retry endpoints (Fixed x-api-key + Authorization)
+# Retry endpoints
 # -------------------------------------------------------------------
 @app.post("/retry-queued")
 def retry_queued(request: Request, x_api_key: Optional[str] = Header(default=None)):
-    # Accept both Authorization: Bearer and x-api-key headers
     supplied = (
         request.headers.get("authorization", "")
         .replace("Bearer ", "")

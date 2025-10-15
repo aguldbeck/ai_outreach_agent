@@ -19,10 +19,13 @@ SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("SUPABASE_ANON_KEY
 # Local fallback file for development
 LOCAL_JOBS_FILE = os.path.join(os.getcwd(), "jobs.json")
 
+
 def _ensure_local_json():
     if not os.path.exists(LOCAL_JOBS_FILE):
         with open(LOCAL_JOBS_FILE, "w") as f:
             json.dump([], f)
+
+
 _ensure_local_json()
 
 supabase: Optional[Client] = None
@@ -40,6 +43,7 @@ else:
 def now_iso() -> str:
     return datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc).isoformat()
 
+
 def _read_local_jobs() -> List[Dict[str, Any]]:
     try:
         with open(LOCAL_JOBS_FILE, "r") as f:
@@ -47,9 +51,11 @@ def _read_local_jobs() -> List[Dict[str, Any]]:
     except Exception:
         return []
 
+
 def _write_local_jobs(jobs: List[Dict[str, Any]]):
     with open(LOCAL_JOBS_FILE, "w") as f:
         json.dump(jobs, f, indent=2)
+
 
 # -------------------------------------------------------------------
 # Core DB Operations
@@ -68,6 +74,7 @@ def db_insert_job(data: Dict[str, Any]) -> Dict[str, Any]:
         _write_local_jobs(jobs)
         return data
 
+
 def db_update_job(job_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
     """Update job by ID and return updated record."""
     patch["updated_at"] = now_iso()
@@ -85,6 +92,7 @@ def db_update_job(job_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
                 return j
         raise RuntimeError(f"Job not found locally: {job_id}")
 
+
 def db_get_jobs(limit: int = 100) -> List[Dict[str, Any]]:
     """Fetch recent jobs."""
     if supabase:
@@ -101,6 +109,7 @@ def db_get_jobs(limit: int = 100) -> List[Dict[str, Any]]:
         jobs.sort(key=lambda j: j.get("created_at", ""), reverse=True)
         return jobs[-limit:]
 
+
 def get_job(job_id: str) -> Optional[Dict[str, Any]]:
     """Retrieve one job by ID."""
     if supabase:
@@ -113,10 +122,17 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
                 return j
         return None
 
+
 # -------------------------------------------------------------------
 # Compatibility Wrappers
 # -------------------------------------------------------------------
-def create_job(user_id: str, filename: str, payload: Optional[dict] = None):
+def create_job(
+    user_id: str,
+    filename: str,
+    payload: Optional[dict] = None,
+    file_url: Optional[str] = None,
+):
+    """Create and store a new job (supports file_url)."""
     data = {
         "user_id": user_id,
         "filename": filename,
@@ -126,10 +142,16 @@ def create_job(user_id: str, filename: str, payload: Optional[dict] = None):
         "created_at": now_iso(),
         "updated_at": now_iso(),
     }
+
+    if file_url:
+        data["file_url"] = file_url
+
     return db_insert_job(data)
+
 
 def update_job(job_id: str, **fields):
     return db_update_job(job_id, fields)
+
 
 def list_jobs(user_id: Optional[str] = None):
     jobs = db_get_jobs()
