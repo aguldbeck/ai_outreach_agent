@@ -9,12 +9,12 @@ anyio==4.6.2.post1
 # ============================================================
 # Supabase & Database Client
 # ============================================================
-supabase==2.4.3
-postgrest==0.16.8
-realtime==1.0.2
-storage3==0.7.3
-supabase-auth==0.3.4
-supabase-functions==0.1.6
+supabase==2.22.0
+postgrest==2.22.0
+realtime==2.22.0
+storage3==2.22.0
+supabase-auth==2.22.0
+supabase-functions==2.22.0
 
 # ============================================================
 # Data Processing & File Handling
