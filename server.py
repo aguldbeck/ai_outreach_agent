@@ -19,10 +19,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from supabase import create_client
 
 # 🧩 FIXED IMPORT PATHS
-from app.parser import read_input_file, validate_columns
+from backend.parser import read_input_file, validate_columns
 from auth import router as auth_router, get_current_user, User
-from app.db_helper import create_job, update_job, get_job, list_jobs
-from app.pipeline import run_pipeline  # ✅ key fix
+from backend.db_helper import create_job, update_job, get_job, list_jobs
+from backend.pipeline import run_pipeline  # ✅ key fix
 
 # -------------------------------------------------------------------
 # Configuration
