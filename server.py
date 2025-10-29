@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 from starlette.middleware.base import BaseHTTPMiddleware
 from supabase import create_client
 
-# 🧩 FIXED IMPORT PATHS
+# 🧩 FIXED IMPORT PATHS (after renaming app → backend)
 from backend.parser import read_input_file, validate_columns
 from auth import router as auth_router, get_current_user, User
 from backend.db_helper import create_job, update_job, get_job, list_jobs
@@ -27,7 +27,7 @@ from backend.pipeline import run_pipeline  # ✅ key fix
 # -------------------------------------------------------------------
 # Configuration
 # -------------------------------------------------------------------
-APP_VERSION = "1.4.5 — Indentation fix + pipeline import"
+APP_VERSION = "1.4.6 — Refactor imports to backend package"
 
 ROOT = os.getcwd()
 UPLOADS_DIR = os.path.join(ROOT, "uploads")
