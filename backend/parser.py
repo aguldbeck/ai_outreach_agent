@@ -13,3 +13,4 @@ def html_to_text(html: str, max_chars: int = 4000) -> str:
         if t:
             bits.append(t)
     return clean_text(" ".join(bits))[:max_chars]
+# redeploy
