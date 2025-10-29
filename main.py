@@ -1,6 +1,6 @@
 import typer
-from app.pipeline import run_enrichment
-from app.config import load_config
+from backend.pipeline import run_enrichment
+from backend.config import load_config
 
 app = typer.Typer(help="AI Outreach Personalization Agent — Step 1 (Website Enrichment)")
 

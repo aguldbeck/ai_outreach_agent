@@ -10,7 +10,7 @@ import time
 import traceback
 from dotenv import load_dotenv
 
-from app.db_helper import list_jobs, update_job, get_job
+from backend.db_helper import list_jobs, update_job, get_job
 from server import process_job, log_event, now_iso
 
 load_dotenv()

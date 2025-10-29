@@ -72,7 +72,7 @@ def build_download_url(job_id, stage_filename="stage3.csv"):
 
 # ───────── Pipeline (stubs call out to app/pipeline.py) ─────────
 # Keep logic in a separate module for clarity.
-from app.pipeline import enrich_stage1, scrape_stage2, generate_stage3
+from backend.pipeline import enrich_stage1, scrape_stage2, generate_stage3
 
 async def run_job(job_id: str):
     """Process Stage1→Stage2→Stage3 sequentially as a background task."""

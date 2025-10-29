@@ -2,8 +2,8 @@ import asyncio
 import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.db_helper import get_next_job, mark_job_done, init_db  # adjust if your db helper path differs
-from app.job_processor import process_job  # adjust import if needed
+from backend.db_helper import get_next_job, mark_job_done, init_db  # adjust if your db helper path differs
+from backend.job_processor import process_job  # adjust import if needed
 
 # --- CONFIG ---
 POLL_INTERVAL = 10  # seconds between job polls
