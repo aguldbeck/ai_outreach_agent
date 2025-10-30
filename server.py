@@ -22,7 +22,7 @@ from supabase import create_client
 print("DEBUG: backend/parser.py exists?", os.path.exists("backend/parser.py"))
 
 # 🧩 FIXED IMPORT PATHS (after renaming app → backend)
-from backend.parser import read_input_file, validate_columns
+from backend.input_parser import read_input_file, validate_columns
 from auth import router as auth_router, get_current_user, User
 from backend.db_helper import create_job, update_job, get_job, list_jobs
 from backend.pipeline import run_pipeline  # ✅ key fix
